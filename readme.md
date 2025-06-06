@@ -1,4 +1,4 @@
-# git test
+# 測試用指令
 
 ## receiver (外部)
 ```
