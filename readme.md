@@ -15,6 +15,5 @@ mm-delay 10 mm-link --meter-uplink --meter-uplink-delay \
 ```
 ### 啟動sender
 ```
-# 將 [你的主機IP] 替換成你自己的 IP
 python3 transport.py sender --ip 192.168.1.103 --port 7000 --sendfile testfile.txt
 ```
