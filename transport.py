@@ -5,20 +5,6 @@
 # 移除 reorder 功能，保留 SACK、fast retransmit 和 timeout 處理
 # 支援多個 gap 的 fast retransmit
 
-# mahimahi
-# mm-delay 10 mm-link --meter-uplink --meter-uplink-delay \--downlink-queue=infinite --uplink-queue=droptail \--uplink-queue-args=bytes=30000 12mbps 12mbps
-
-
-# 生成測資
-# python3 generate_bogus_text.py 10000 > testfile.txt
-
-
-# 啟動 receiver
-# python3 transport.py receiver --ip 0.0.0.0 --port 7000
-
-# 啟動 sender
-# python3 transport.py sender --ip 192.168.1.102 --port 7000 --sendfile test_file.txt --simloss 0
-
 import argparse
 import json
 from typing import Dict, List, Optional, Tuple
@@ -130,8 +116,11 @@ class Sender:
         # 儲存已確認的 bytes
         self.acked_bytes = set()
         self.last_acked = -1
-        # 超時間隔（RTO），初始值設為 0.1 秒（根據之前建議）
-        self.timeout_interval = 0.1
+        # 超時間隔（RTO），初始值設為 1 秒（根據作業建議）
+        self.timeout_interval = 1.0
+        # 用於計算 RTO 的變數
+        self.estimated_rtt = 0.0
+        self.dev_rtt = 0.0
         # 用於 fast retransmit：追蹤重複 SACKs
         self.dup_acks: Dict[Tuple[Tuple[int, int], ...], int] = {}
 
@@ -195,6 +184,26 @@ class Sender:
             freed_bytes: 新確認的字節數。
         '''
         freed_bytes = 0
+        current_time = time.time()
+
+        # 計算 SampleRTT 並更新 RTO
+        if packet_id in self.sent_packets:
+            sent_time = self.sent_packets[packet_id][1]
+            sample_rtt = current_time - sent_time
+            if self.estimated_rtt == 0.0:
+                # 第一次計算，初始化值
+                self.estimated_rtt = sample_rtt
+                self.dev_rtt = sample_rtt / 2
+            else:
+                # 使用 EWMA 計算 EstimatedRTT 和 DevRTT，α = 1/64
+                alpha = 1/64
+                self.estimated_rtt = (1 - alpha) * self.estimated_rtt + alpha * sample_rtt
+                self.dev_rtt = (1 - alpha) * self.dev_rtt + alpha * abs(sample_rtt - self.estimated_rtt)
+            # 更新 RTO，最小值為 1 毫秒
+            self.timeout_interval = max(0.001, self.estimated_rtt + 4 * self.dev_rtt)
+            print(f"SampleRTT: {sample_rtt:.3f}s, EstimatedRTT: {self.estimated_rtt:.3f}s, DevRTT: {self.dev_rtt:.3f}s, New RTO: {self.timeout_interval:.3f}s")
+
+        # 處理確認的字節
         for start, end in sacks:
             for seq in range(start, end):
                 if seq not in self.acked_bytes:
@@ -358,7 +367,7 @@ def start_sender(ip: str, port: int, data: str, recv_window: int, simloss: float
                         continue
 
                     print(f"Got ACK sacks: {received['sacks']}, id: {received['id']}")
-                    inflight -= sender.ack_packet(received["sacks"], received["id"])
+                    inflight -= sender.ack_packet(received['sacks'], received["id"])
                     assert inflight >= 0
                 except socket.timeout:
                     inflight = 0
