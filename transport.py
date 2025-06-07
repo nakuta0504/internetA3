@@ -2,6 +2,8 @@
 # Your ID: B092010020
 
 # A3版本
+# 移除reorder 
+# 可以跑loss 0.1了
 
 import argparse
 import json
@@ -87,6 +89,9 @@ class Sender:
         self.data_len = data_len
         self.next_seq = 0
         self.sent_packets: Dict[int, Tuple[Tuple[int, int], float, bool]] = {}
+        # [解決inflight] 初始化 acked_packet_ids 以避免重複處理封包
+        self.acked_packet_ids = set()
+
         self.acked_bytes = set()
         self.last_acked = -1
         self.timeout_interval = 1.0  # 初始 RTO 為 1 秒
@@ -97,18 +102,23 @@ class Sender:
         self.alpha = 1/64  # EWMA 參數
         self.ssthresh = 64000  # ssthresh 初始值
         self.state = "slow_start"  # 初始狀態為 slow start
+        self.dupACKcount = 0 # 用於計算重複 ACK 的次數
 
     def timeout(self):
-        print("Sender timeout，重置 cwnd 並重新傳輸未確認的封包")
-        self.cwnd = packet_size  # 重置 cwnd 為一個封包大小
-
-        print("ssthresh 重置為 cwnd 的一半")
+        print(f"Timeout in {self.state}, 進入 slow start")
+        self.state = "slow_start"
         self.ssthresh = max(packet_size, self.cwnd // 2)  # ssthresh 重置為 cwnd 的一半，但至少為一個封包大小
-        print(f"新的 ssthresh: {self.ssthresh}")
+        self.cwnd = packet_size  # 重置 cwnd 為一個封包大小
+        self.dupACKcount = 0  # 重置 dup ACK 計數
+        print(f"新的 ssthresh: {self.ssthresh}, 新的 cwnd: {self.cwnd}")
+
 
         for packet_id, (seq_range, _, acked) in list(self.sent_packets.items()):
             if not acked:
                 self.sent_packets[packet_id] = (seq_range, 0, False)
+
+        # [解決inflight] 初始化 acked_packet_ids 以避免重複處理封包
+        self.acked_packet_ids = set()
 
     def _check_duplicate_acks(self, sacks: List[Tuple[int, int]]):
         sorted_sacks = sorted(sacks, key=lambda x: x[0])
@@ -125,16 +135,23 @@ class Sender:
         self.dup_acks[sack_key] += 1
 
 
+        # 增加 dupACKcount 
+        if self.dup_acks[sack_key] > 1:  # 第二個及以上的相同 SACK 視為重複
+            self.dupACKcount += 1
+            print(f"檢測到重複 ACK，dupACKcount 增加至 {self.dupACKcount}")
+
+        # dupACKcount 超過 3 次，進入 fast recovery
+        if self.dupACKcount == 3:
+            print("dupACKcount 達到 3，啟動 fast recovery")
+            self.ssthresh = max(packet_size, self.cwnd // 2)
+            self.cwnd = self.ssthresh + 3 * packet_size  
+            self.state = "fast_recovery" # 進入 fast recovery
+            self.dupACKcount = 0  # 重置 dup ACK 計數
+            print(f"新的 ssthresh: {self.ssthresh}, 新的 cwnd: {self.cwnd}")
+
         # 檢查是否達到 3 次重複 ACK
         if self.dup_acks[sack_key] >= 3:
-            
-            print("3 次 duplicate ack， ssthresh 變為 cwnd 的一半")
-            self.ssthresh = max(packet_size, self.cwnd // 2) # ssthresh 重置為 cwnd 的一半，但至少為一個封包大小
-            print(f"新的 ssthresh: {self.ssthresh}")
 
-
-            self.cwnd = max(packet_size, self.ssthresh + 3)  # 重置 cwnd 為 ssthresh + 3 個封包大小
-            print(f"Fast retransmit 觸發，cwnd 變為 {self.cwnd}")
             gaps = []
             prev_end = -1
 
@@ -152,11 +169,17 @@ class Sender:
                     if not acked and seq_range[0] >= gap_start and seq_range[1] <= gap_end:
                         print(f"3次 duplicate ack，啟動 fast retransmit，seq：{seq_range}")
                         self.sent_packets[packet_id] = (seq_range, 0, False)
-                        retransmitted = True
-            if retransmitted:
-                del self.dup_acks[sack_key]
+        # [解決inflight] 初始化 acked_packet_ids 以避免重複處理封包
+        self.acked_packet_ids = set()
+        retransmitted = True
+        if retransmitted:
+            del self.dup_acks[sack_key]
 
     def ack_packet(self, sacks: List[Tuple[int, int]], packet_id: int) -> int:
+        # [解決inflight] 檢查是否已處理過此封包 ID
+        if packet_id in self.acked_packet_ids:
+            return 0
+        self.acked_packet_ids.add(packet_id)
         freed_bytes = 0
         current_time = time.time()
 
@@ -190,10 +213,29 @@ class Sender:
                     for pid, (seq_range, sent_time, acked) in self.sent_packets.items():
                         if not acked and seq_range[0] <= seq < seq_range[1]:
                             self.sent_packets[pid] = (seq_range, sent_time, True)
+        # [解決inflight] 初始化 acked_packet_ids 以避免重複處理封包
+        self.acked_packet_ids = set()
 
-                            # 更新 cwnd
-                            self.cwnd += packet_size  # 加性增加 (slow start)
-                            print(f"[slow start] ACK 增加 cwnd 至 {self.cwnd}")
+        # 更新 cwnd
+
+        if self.state == "slow_start":
+            if self.cwnd < self.ssthresh:
+                self.cwnd += packet_size
+                print(f"[slow start] ACK 增加 cwnd 至 {self.cwnd}")
+            else:
+                self.state = "congestion_avoidance"
+                print(f"[slow start] cwnd 超過 ssthresh，切換到 congestion avoidance")
+
+        elif self.state == "congestion_avoidance": 
+            self.cwnd += packet_size * packet_size / self.cwnd
+            print(f"[congestion avoidance] ACK 增加 cwnd 至 {self.cwnd}")
+
+        elif self.state == "fast_recovery": 
+            self.cwnd = max(packet_size, self.ssthresh)
+            self.state = "congestion_avoidance"
+            print(f"[fast recovery] ACK 增加 cwnd 至 {self.cwnd}")
+            print("切換到 congestion avoidance ")
+                                
 
         seq = 0
         while seq in self.acked_bytes:
@@ -213,6 +255,8 @@ class Sender:
             if not acked and (sent_time == 0 or time.time() - sent_time >= self.timeout_interval):
                 print(f"重新傳輸 sequence：{seq_range}, ID: {pid}")
                 self.sent_packets[pid] = (seq_range, time.time(), False)
+                # [解決inflight] 初始化 acked_packet_ids 以避免重複處理封包
+                self.acked_packet_ids = set()
                 return seq_range
 
         # 正常發送新的封包
@@ -220,6 +264,8 @@ class Sender:
             start_seq = self.next_seq
             end_seq = min(start_seq + payload_size, self.data_len)
             self.sent_packets[packet_id] = ((start_seq, end_seq), time.time(), False)
+            # [解決inflight] 初始化 acked_packet_ids 以避免重複處理封包
+            self.acked_packet_ids = set()
             self.next_seq = end_seq
             return (start_seq, end_seq)
 
@@ -307,7 +353,7 @@ def start_sender(ip: str, port: int, data: str, recv_window: int, simloss: float
                             got_fin_ack = True
                             break
                     except socket.timeout:
-                        inflight = 0
+                        inflight = 0 
                         print("Timeout in final waiting")
                         sender.timeout()
                         continue
@@ -349,9 +395,12 @@ def start_sender(ip: str, port: int, data: str, recv_window: int, simloss: float
 
                     print(f"Got ACK sacks: {received['sacks']}, id: {received['id']}")
                     inflight -= sender.ack_packet(received['sacks'], received["id"])
+                    # [解決inflight] 避免 inflight 為負值
+                    if inflight < 0:
+                        inflight = 0
                     assert inflight >= 0
                 except socket.timeout:
-                    inflight = 0
+                    inflight = 0  
                     print("Timeout")
                     sender.timeout()
 
