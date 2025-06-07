@@ -19,7 +19,7 @@ packet_size = 1500
 
 # BDP = product of link rate and base delay 12,000,000 bits/s × 0.02 s(20ms RTT) = 140,000 bits = 30000 bytes
 BDP = 30000  # 30000 bytes
-
+MULT = 2
 
 class Receiver:
     def __init__(self):
@@ -89,7 +89,7 @@ class Receiver:
                 print(f"未處理封包：{seq_range}, 資料長度：{len(data)}")
 
 class Sender:
-    def __init__(self, data_len: int):
+    def __init__(self, data_len: int,fixed_cwnd: int = None):
         self.data_len = data_len
         self.next_seq = 0
         self.sent_packets: Dict[int, Tuple[Tuple[int, int], float, bool]] = {}
@@ -102,7 +102,7 @@ class Sender:
         self.estimated_rtt = 0.0
         self.dev_rtt = 0.0
         self.dup_acks: Dict[Tuple[Tuple[int, int], ...], int] = {}
-        self.cwnd = packet_size  # 初始 cwnd 為一個封包大小
+        self.cwnd = fixed_cwnd if fixed_cwnd is not None else packet_size  # 使用固定 cwnd 或預設成 packet_size
         self.alpha = 1/64  # EWMA 參數
         self.ssthresh = 64000  # ssthresh 初始值
         self.state = "slow_start"  # 初始狀態為 slow start
@@ -111,9 +111,9 @@ class Sender:
     def timeout(self):
         print(f"Timeout in {self.state}, 進入 slow start")
         self.state = "slow_start"
-        self.ssthresh = max(packet_size, self.cwnd // 2)  # ssthresh 重置為 cwnd 的一半，但至少為一個封包大小
-        self.cwnd = packet_size  # 重置 cwnd 為一個封包大小
-        self.dupACKcount = 0  # 重置 dup ACK 計數
+        # self.ssthresh = max(packet_size, self.cwnd // 2)  # ssthresh 重置為 cwnd 的一半，但至少為一個封包大小
+        # self.cwnd = packet_size  # 重置 cwnd 為一個封包大小
+        # self.dupACKcount = 0  # 重置 dup ACK 計數
         print(f"新的 ssthresh: {self.ssthresh}, 新的 cwnd: {self.cwnd}")
 
 
@@ -145,13 +145,13 @@ class Sender:
             print(f"檢測到重複 ACK，dupACKcount 增加至 {self.dupACKcount}")
 
         # dupACKcount 超過 3 次，進入 fast recovery
-        if self.dupACKcount == 3:
-            print("dupACKcount 達到 3，啟動 fast recovery")
-            self.ssthresh = max(packet_size, self.cwnd // 2)
-            self.cwnd = self.ssthresh + 3 * packet_size  
-            self.state = "fast_recovery" # 進入 fast recovery
-            self.dupACKcount = 0  # 重置 dup ACK 計數
-            print(f"新的 ssthresh: {self.ssthresh}, 新的 cwnd: {self.cwnd}")
+        # if self.dupACKcount == 3:
+        #     print("dupACKcount 達到 3，啟動 fast recovery")
+        #     self.ssthresh = max(packet_size, self.cwnd // 2)
+        #     self.cwnd = self.ssthresh + 3 * packet_size  
+        #     self.state = "fast_recovery" # 進入 fast recovery
+        #     self.dupACKcount = 0  # 重置 dup ACK 計數
+        #     print(f"新的 ssthresh: {self.ssthresh}, 新的 cwnd: {self.cwnd}")
 
         # 檢查是否達到 3 次重複 ACK
         if self.dup_acks[sack_key] >= 3:
@@ -222,23 +222,23 @@ class Sender:
 
         # 更新 cwnd
 
-        if self.state == "slow_start":
-            if self.cwnd < self.ssthresh:
-                self.cwnd += packet_size
-                print(f"[slow start] ACK 增加 cwnd 至 {self.cwnd}")
-            else:
-                self.state = "congestion_avoidance"
-                print(f"[slow start] cwnd 超過 ssthresh，切換到 congestion avoidance")
+        # if self.state == "slow_start":
+        #     if self.cwnd < self.ssthresh:
+        #         self.cwnd += packet_size
+        #         print(f"[slow start] ACK 增加 cwnd 至 {self.cwnd}")
+        #     else:
+        #         self.state = "congestion_avoidance"
+        #         print(f"[slow start] cwnd 超過 ssthresh，切換到 congestion avoidance")
 
-        elif self.state == "congestion_avoidance": 
-            self.cwnd += packet_size * packet_size / self.cwnd
-            print(f"[congestion avoidance] ACK 增加 cwnd 至 {self.cwnd}")
+        # elif self.state == "congestion_avoidance": 
+        #     self.cwnd += packet_size * packet_size / self.cwnd
+        #     print(f"[congestion avoidance] ACK 增加 cwnd 至 {self.cwnd}")
 
-        elif self.state == "fast_recovery": 
-            self.cwnd = max(packet_size, self.ssthresh)
-            self.state = "congestion_avoidance"
-            print(f"[fast recovery] ACK 增加 cwnd 至 {self.cwnd}")
-            print("切換到 congestion avoidance ")
+        # elif self.state == "fast_recovery": 
+        #     self.cwnd = max(packet_size, self.ssthresh)
+        #     self.state = "congestion_avoidance"
+        #     print(f"[fast recovery] ACK 增加 cwnd 至 {self.cwnd}")
+        #     print("切換到 congestion avoidance ")
                                 
 
         seq = 0
@@ -327,8 +327,8 @@ def start_receiver(ip: str, port: int):
             else:
                 assert False
 
-def start_sender(ip: str, port: int, data: str, recv_window: int, simloss: float):
-    sender = Sender(len(data))
+def start_sender(ip: str, port: int, data: str, recv_window: int, simloss: float, fixed_cwnd: int):
+    sender = Sender(len(data), fixed_cwnd)
     start_time = time.time()  # 記錄傳輸開始時間 用於計算goodput
 
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_socket:
@@ -440,7 +440,10 @@ def main():
 
         with open(args.sendfile, 'r', encoding='utf-8') as f:
             data = f.read().replace('\r\n', '\n')
-        start_sender(args.ip, args.port, data, args.recv_window, args.simloss)
+        
+        cwnd = BDP * MULT  # 計算 cwnd
+        print(f"\nRunning test with cwnd = {cwnd} bytes ({MULT}x BDP)")
+        start_sender(args.ip, args.port, data, args.recv_window, args.simloss, cwnd)
 
 if __name__ == "__main__":
     main()

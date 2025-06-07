@@ -1,0 +1,20 @@
+cwnd: 30000, Total unique bytes: 1003416, Duration: 38.09s, Goodput: 26345.89 bytes/s
+Timestamp: 2025-06-08 01:21:24
+cwnd: 60000, Total unique bytes: 1003416, Duration: 86.66s, Goodput: 11578.20 bytes/s
+Timestamp: 2025-06-08 01:27:34
+cwnd: 90000, Total unique bytes: 1003416, Duration: 37.89s, Goodput: 26485.71 bytes/s
+Timestamp: 2025-06-08 01:29:58
+cwnd: 120000, Total unique bytes: 1003416, Duration: 39.67s, Goodput: 25295.60 bytes/s
+Timestamp: 2025-06-08 01:31:12
+cwnd: 150000, Total unique bytes: 1003416, Duration: 71.35s, Goodput: 14062.70 bytes/s
+Timestamp: 2025-06-08 01:35:07
+cwnd: 180000, Total unique bytes: 1003416, Duration: 45.88s, Goodput: 21872.52 bytes/s
+Timestamp: 2025-06-08 01:38:30
+cwnd: 210000, Total unique bytes: 1003416, Duration: 98.84s, Goodput: 10151.90 bytes/s
+Timestamp: 2025-06-08 01:41:53
+cwnd: 240000, Total unique bytes: 1003416, Duration: 98.95s, Goodput: 10140.99 bytes/s
+Timestamp: 2025-06-08 01:46:15
+cwnd: 270000, Total unique bytes: 1003416, Duration: 101.23s, Goodput: 9911.99 bytes/s
+Timestamp: 2025-06-08 01:48:46
+cwnd: 300000, Total unique bytes: 1003416, Duration: 94.35s, Goodput: 10634.98 bytes/s
+Timestamp: 2025-06-08 01:55:49
