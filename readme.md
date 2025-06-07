@@ -1,5 +1,7 @@
 # 測試用指令
 
+
+
 ## 生成測資
 ```
 source venv/bin/activate
@@ -27,3 +29,6 @@ mm-delay 10 mm-link --meter-uplink --meter-uplink-delay \
 ```
 python3 transport.py sender --ip 10.0.0.1 --port 7000 --sendfile testfile.txt --recv_window 15000 --simloss 0
 ```
+
+
+![image](https://github.com/user-attachments/assets/b4c04403-5220-403b-8bc1-1c5d2b9179df)
