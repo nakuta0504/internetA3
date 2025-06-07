@@ -2,6 +2,10 @@
 
 ## 生成測資
 ```
+source venv/bin/activate
+```
+
+```
 python3 generate_bogus_text.py 10000 > testfile.txt
 ```
 
