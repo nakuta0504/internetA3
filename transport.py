@@ -1,9 +1,7 @@
 # Your Name: 林仲威
 # Your ID: B092010020
 
-# A3 作業版本
-# 移除 reorder 功能，保留 SACK、fast retransmit 和 timeout 處理
-# 支援多個 gap 的 fast retransmit
+# A3版本
 
 import argparse
 import json
@@ -19,7 +17,7 @@ packet_size = 1500
 
 class Receiver:
     def __init__(self):
-        # 緩衝區，用於儲存亂序封包：seq range -> 資料
+        # buffer，用於儲存亂序封包：seq range -> 資料
         self.buffer = {}
         # 下一個預期的 sequence number
         self.next_expected_seq = 0
@@ -27,17 +25,9 @@ class Receiver:
         self.received_ranges = []
 
     def data_packet(self, seq_range: Tuple[int, int], data: str) -> Tuple[List[Tuple[int, int]], str]:
-        '''
-        處理接收到的資料封包。
-        參數：
-            seq_range: 封包的範圍，格式為 (start, end)。
-            data: 封包的資料內容。
-        返回：
-            裝有已接收的 sequence number 的 list 與資料的字串。
-        '''
         start_seq, end_seq = seq_range
 
-        # 驗證 sequence number 的有效性
+        # 驗證 sequence number
         if start_seq >= end_seq or len(data) != end_seq - start_seq:
             return (self.received_ranges, '')
 
@@ -53,7 +43,7 @@ class Receiver:
         # 更新 SACKs 的接收範圍
         self._update_received_ranges(start_seq, end_seq)
 
-        # 檢查是否可以按序傳遞資料給應用程式
+        # 檢查是否可以按序傳遞資料給應用層
         app_data = ''
         while True:
             found = False
@@ -70,12 +60,6 @@ class Receiver:
         return (self.received_ranges, app_data)
 
     def _update_received_ranges(self, start_seq: int, end_seq: int):
-        '''
-        更新已接收的 seq 範圍，合併重疊或相鄰的範圍。
-        參數：
-            start_seq
-            end_seq
-        '''
         self.received_ranges.append((start_seq, end_seq))
         if len(self.received_ranges) == 1:
             return
@@ -93,10 +77,6 @@ class Receiver:
         self.received_ranges = merged
 
     def finish(self):
-        '''
-        當發送方發送 FIN 封包時調用。
-        檢查是否所有資料都已傳遞（用來 DEBUG）。
-        '''
         if self.buffer:
             print(f"DEBUG：結束時 buffer 仍有 {len(self.buffer)} 個封包未處理")
             for seq_range, data in self.buffer.items():
@@ -104,41 +84,33 @@ class Receiver:
 
 class Sender:
     def __init__(self, data_len: int):
-        '''
-        初始化發送方。
-        參數：
-            data_len: 要發送的資料總長度。
-        '''
         self.data_len = data_len
         self.next_seq = 0
-        # 儲存已發送的封包：{packet_id: (seq_range, sent_time, acked)}
         self.sent_packets: Dict[int, Tuple[Tuple[int, int], float, bool]] = {}
-        # 儲存已確認的 bytes
         self.acked_bytes = set()
         self.last_acked = -1
-        # 超時間隔（RTO），初始值設為 1 秒（根據作業建議）
-        self.timeout_interval = 1.0
-        # 用於計算 RTO 的變數
+        self.timeout_interval = 1.0  # 初始 RTO 為 1 秒
         self.estimated_rtt = 0.0
         self.dev_rtt = 0.0
-        # 用於 fast retransmit：追蹤重複 SACKs
         self.dup_acks: Dict[Tuple[Tuple[int, int], ...], int] = {}
+        self.cwnd = packet_size  # 初始 cwnd 為一個封包大小
+        self.alpha = 1/64  # EWMA 參數
+        self.ssthresh = 64000  # ssthresh 初始值
+        self.state = "slow_start"  # 初始狀態為 slow start
 
     def timeout(self):
-        '''
-        處理超時，將未確認的封包標記為需要重新傳輸。
-        '''
-        print("Sender timeout，重新傳輸未確認的封包")
+        print("Sender timeout，重置 cwnd 並重新傳輸未確認的封包")
+        self.cwnd = packet_size  # 重置 cwnd 為一個封包大小
+
+        print("ssthresh 重置為 cwnd 的一半")
+        self.ssthresh = max(packet_size, self.cwnd // 2)  # ssthresh 重置為 cwnd 的一半，但至少為一個封包大小
+        print(f"新的 ssthresh: {self.ssthresh}")
+
         for packet_id, (seq_range, _, acked) in list(self.sent_packets.items()):
             if not acked:
                 self.sent_packets[packet_id] = (seq_range, 0, False)
 
     def _check_duplicate_acks(self, sacks: List[Tuple[int, int]]):
-        '''
-        檢查重複確認，根據連續相同 SACKs 觸發 fast retransmit，可處理多個 gap。
-        參數：
-            sacks: 已確認的 seq 範圍 list。
-        '''
         sorted_sacks = sorted(sacks, key=lambda x: x[0])
         highest_contiguous = -1
         for start, end in sorted_sacks:
@@ -152,9 +124,21 @@ class Sender:
             self.dup_acks[sack_key] = 0
         self.dup_acks[sack_key] += 1
 
+
+        # 檢查是否達到 3 次重複 ACK
         if self.dup_acks[sack_key] >= 3:
+            
+            print("3 次 duplicate ack， ssthresh 變為 cwnd 的一半")
+            self.ssthresh = max(packet_size, self.cwnd // 2) # ssthresh 重置為 cwnd 的一半，但至少為一個封包大小
+            print(f"新的 ssthresh: {self.ssthresh}")
+
+
+            self.cwnd = max(packet_size, self.ssthresh + 3)  # 重置 cwnd 為 ssthresh + 3 個封包大小
+            print(f"Fast retransmit 觸發，cwnd 變為 {self.cwnd}")
             gaps = []
             prev_end = -1
+
+            # 重送封包
             for start, end in sorted_sacks:
                 if prev_end != -1 and start > prev_end:
                     gaps.append((prev_end, start))
@@ -166,44 +150,38 @@ class Sender:
             for gap_start, gap_end in gaps:
                 for packet_id, (seq_range, sent_time, acked) in list(self.sent_packets.items()):
                     if not acked and seq_range[0] >= gap_start and seq_range[1] <= gap_end:
-                        print("*********************************************")
                         print(f"3次 duplicate ack，啟動 fast retransmit，seq：{seq_range}")
-                        print("*********************************************")
                         self.sent_packets[packet_id] = (seq_range, 0, False)
                         retransmitted = True
             if retransmitted:
                 del self.dup_acks[sack_key]
 
     def ack_packet(self, sacks: List[Tuple[int, int]], packet_id: int) -> int:
-        '''
-        處理接收到的確認。
-        參數：
-            sacks: 已確認的 seq 範圍 list。
-            packet_id: 觸發此確認的封包 ID。
-        返回：
-            freed_bytes: 新確認的字節數。
-        '''
         freed_bytes = 0
         current_time = time.time()
+
+        # EstimatedRTT = α × SampleRTT + (1 - α) × EstimatedRTT
+        # DevRTT = α × |SampleRTT - EstimatedRTT| + (1 - α) × DevRTT
+        # RTO = EstimatedRTT + 4 × DevRTT
 
         # 計算 SampleRTT 並更新 RTO
         if packet_id in self.sent_packets:
             sent_time = self.sent_packets[packet_id][1]
-            sample_rtt = current_time - sent_time
-            if self.estimated_rtt == 0.0:
-                # 第一次計算，初始化值
-                self.estimated_rtt = sample_rtt
-                self.dev_rtt = sample_rtt / 2
-            else:
-                # 使用 EWMA 計算 EstimatedRTT 和 DevRTT，α = 1/64
-                alpha = 1/64
-                self.estimated_rtt = (1 - alpha) * self.estimated_rtt + alpha * sample_rtt
-                self.dev_rtt = (1 - alpha) * self.dev_rtt + alpha * abs(sample_rtt - self.estimated_rtt)
-            # 更新 RTO，最小值為 1 毫秒
-            self.timeout_interval = max(0.001, self.estimated_rtt + 4 * self.dev_rtt)
-            print(f"SampleRTT: {sample_rtt:.3f}s, EstimatedRTT: {self.estimated_rtt:.3f}s, DevRTT: {self.dev_rtt:.3f}s, New RTO: {self.timeout_interval:.3f}s")
+            if sent_time > 0:  # 確保 sent_time > 0
+                sample_rtt = current_time - sent_time
+                if self.estimated_rtt == 0.0:
+                    self.estimated_rtt = sample_rtt # EstimatedRTT 初始值是 SampleRTT
+                    self.dev_rtt = sample_rtt / 2 # DevRTT 初始值設定成 SampleRTT 的一半
+                else:
+                    self.estimated_rtt = self.alpha * sample_rtt + (1 - self.alpha) * self.estimated_rtt # EstimatedRTT公式
+                    self.dev_rtt = self.alpha * abs(sample_rtt - self.estimated_rtt) +  (1 - self.alpha) * self.dev_rtt # DevRTT公式
 
-        # 處理確認的字節
+                # Make sure rto is never smaller than your machine’s ability to measure time, say 1 ms (or 0.001seconds).
+                self.timeout_interval = max(0.001, self.estimated_rtt + 4 * self.dev_rtt) # RTO 公式
+                print(f"SampleRTT: {sample_rtt:.3f}s, EstimatedRTT: {self.estimated_rtt:.3f}s, "
+                      f"DevRTT: {self.dev_rtt:.3f}s, New RTO: {self.timeout_interval:.3f}s, cwnd: {self.cwnd}")
+
+        # 處理確認的 bytes 並增加 cwnd
         for start, end in sacks:
             for seq in range(start, end):
                 if seq not in self.acked_bytes:
@@ -213,7 +191,10 @@ class Sender:
                         if not acked and seq_range[0] <= seq < seq_range[1]:
                             self.sent_packets[pid] = (seq_range, sent_time, True)
 
-        print(f"Debug: acked_bytes size = {len(self.acked_bytes)}, expected data_len = {self.data_len}")
+                            # 更新 cwnd
+                            self.cwnd += packet_size  # 加性增加 (slow start)
+                            print(f"[slow start] ACK 增加 cwnd 至 {self.cwnd}")
+
         seq = 0
         while seq in self.acked_bytes:
             seq += 1
@@ -223,13 +204,6 @@ class Sender:
         return freed_bytes
 
     def send(self, packet_id: int) -> Optional[Tuple[int, int]]:
-        '''
-        決定下一個要發送的序列範圍。
-        參數：
-            packet_id: 新封包的 ID。
-        返回：
-            要發送的 seq 範圍，若所有資料已發送且確認則返回 None。
-        '''
         if self.next_seq >= self.data_len and len(self.acked_bytes) == self.data_len:
             print(f"Debug: All data sent and acked, next_seq={self.next_seq}, acked_bytes={len(self.acked_bytes)}")
             return None
@@ -250,6 +224,12 @@ class Sender:
             return (start_seq, end_seq)
 
         return (0, 0)
+
+    def get_cwnd(self) -> int:
+        return max(packet_size, int(self.cwnd))  # 確保 cwnd 不小於一個封包大小
+
+    def get_rto(self) -> float:
+        return self.timeout_interval
 
 def start_receiver(ip: str, port: int):
     receivers: Dict[str, Tuple[Receiver, Any]] = {}
@@ -302,14 +282,15 @@ def start_sender(ip: str, port: int, data: str, recv_window: int, simloss: float
 
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_socket:
         client_socket.connect((ip, port))
-        client_socket.settimeout(0.1)  # 設置 socket 超時為 0.1 秒，與 RTO 一致
+        client_socket.settimeout(0.1)
 
         inflight = 0
         packet_id = 0
         wait = False
 
         while True:
-            if inflight + packet_size < recv_window and not wait:
+            cwnd = sender.get_cwnd()
+            if inflight + packet_size <= min(recv_window, cwnd) and not wait:
                 seq = sender.send(packet_id)
                 got_fin_ack = False
                 if seq is None:
