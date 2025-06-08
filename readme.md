@@ -3,6 +3,7 @@
 
 
 ## 生成測資
+### 先開環境
 ```
 source venv/bin/activate
 ```
@@ -28,6 +29,11 @@ mm-delay 10 mm-link --meter-uplink --meter-uplink-delay \
 
 ```
 python3 transport.py sender --ip 10.0.0.1 --port 7000 --sendfile testfile.txt --recv_window 15000 --simloss 0
+```
+#### 兩個sender同時跑
+```
+python3 transport.py sender --ip 10.0.0.1 --port 7000 --sendfile testfile.txt --recv_window 15000 --simloss 0.1&
+python3 transport.py sender --ip 10.0.0.1 --port 8000 --sendfile testfile.txt --recv_window 15000 --simloss 0.1
 ```
 
 

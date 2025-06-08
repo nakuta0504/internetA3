@@ -3,7 +3,9 @@
 
 # A3版本
 # 移除reorder 
-# 可以跑loss 0.1了
+# 可以跑loss 0.1了 
+# 可以生goodput結果
+# 可以產圖
 
 import argparse
 import json
@@ -11,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 import random
 import socket
 import time
+import matplotlib.pyplot as plt
 
 # The maximum size of the data contained within one packet
 payload_size = 1200
@@ -108,6 +111,9 @@ class Sender:
         self.state = "slow_start"  # 初始狀態為 slow start
         self.dupACKcount = 0 # 用於計算重複 ACK 的次數
 
+        # 加入紀錄時間和 cwnd 的列表
+        self.cwnd_history = []  # (時間, cwnd) 的列表
+
     def timeout(self):
         print(f"Timeout in {self.state}, 進入 slow start")
         self.state = "slow_start"
@@ -152,6 +158,7 @@ class Sender:
             self.state = "fast_recovery" # 進入 fast recovery
             self.dupACKcount = 0  # 重置 dup ACK 計數
             print(f"新的 ssthresh: {self.ssthresh}, 新的 cwnd: {self.cwnd}")
+            self.cwnd_history.append((time.time(), self.cwnd))  # 紀錄 fast recovery 時的 cwnd
 
         # 檢查是否達到 3 次重複 ACK
         if self.dup_acks[sack_key] >= 3:
@@ -226,6 +233,7 @@ class Sender:
             if self.cwnd < self.ssthresh:
                 self.cwnd += packet_size
                 print(f"[slow start] ACK 增加 cwnd 至 {self.cwnd}")
+                self.cwnd_history.append((time.time(), self.cwnd))  # 紀錄 ACK 時的 cwnd
             else:
                 self.state = "congestion_avoidance"
                 print(f"[slow start] cwnd 超過 ssthresh，切換到 congestion avoidance")
@@ -233,12 +241,14 @@ class Sender:
         elif self.state == "congestion_avoidance": 
             self.cwnd += packet_size * packet_size / self.cwnd
             print(f"[congestion avoidance] ACK 增加 cwnd 至 {self.cwnd}")
+            self.cwnd_history.append((time.time(), self.cwnd))  # 紀錄 ACK 時的 cwnd
 
         elif self.state == "fast_recovery": 
             self.cwnd = max(packet_size, self.ssthresh)
             self.state = "congestion_avoidance"
             print(f"[fast recovery] ACK 增加 cwnd 至 {self.cwnd}")
             print("切換到 congestion avoidance ")
+            self.cwnd_history.append((time.time(), self.cwnd))  # 紀錄 ACK 時的 cwnd
                                 
 
         seq = 0
@@ -418,6 +428,19 @@ def start_sender(ip: str, port: int, data: str, recv_window: int, simloss: float
         with open("goodput_results.txt", "a") as f:  # "a" 不會覆蓋原有內容
             f.write(f"cwnd: {sender.cwnd}, Total unique bytes: {total_unique_bytes}, "f"Duration: {duration:.2f}s, Goodput: {goodput:.2f} bytes/s\n")
             f.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")  # 紀錄時間
+
+        # 繪製時間與 cwnd 變化的圖
+        times, cwnds = zip(*sender.cwnd_history)
+        relative_times = [(t - start_time) for t in times]  # 將時間轉為相對時間（從 0 開始）
+        plt.figure(figsize=(10, 6))
+        plt.plot(relative_times, cwnds, label=f'cwnd(loss = 0.1)', color='blue')
+        plt.xlabel('Time (seconds)')
+        plt.ylabel('cwnd (bytes)')
+        plt.title('cwnd vs Time ')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(f'cwnd_vs_time_cwnd{time.strftime('%Y%m%d_%H%M%S')}.png')  # 儲存圖表
+        plt.close()  # 關閉圖表，釋放記憶體
 
 def main():
         
