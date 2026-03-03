@@ -36,5 +36,7 @@ python3 transport.py sender --ip 10.0.0.1 --port 7000 --sendfile testfile.txt --
 python3 transport.py sender --ip 10.0.0.1 --port 8000 --sendfile testfile.txt --recv_window 15000 --simloss 0.1
 ```
 
+### 影片
+https://youtu.be/ulQ1b6gGZPQ?si=qUykyCE3vL1bp8-X
 
 ![image](https://github.com/user-attachments/assets/b4c04403-5220-403b-8bc1-1c5d2b9179df)
